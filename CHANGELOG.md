@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.9.28] — 2026-06-07
+
+Hotfix wave on top of v0.9.27. Three real-world bug reports against the freshly-shipped release plus a security regression on agent-scope isolation.
+
+### Security
+
+- **`AGENTMEMORY_AGENT_SCOPE=isolated` not enforced on `mem::search` / `POST /agentmemory/search` / `memory_recall` / `recall_context`** ([#817](https://github.com/rohitg00/agentmemory/issues/817)). The PR #654 isolation work covered `mem::smart-search`, `/memories`, `/observations`, and `/sessions` but missed the BM25-only recall path. An isolated worker booted with `AGENT_ID=B` could read agent A's memories via the standard MCP `memory_recall` tool. `mem::search` now applies the same `getAgentId()` / `isAgentScopeIsolated()` filter the smart-search path uses (wildcard `agentId: "*"` bypasses, explicit `agentId` pins, isolated mode falls back to env `AGENT_ID`). `recall_context` prompt also filters its kv.list memory feed by the active agent.
+
+### Fixed
+
+- **All data lost on `agentmemory stop` followed by restart** ([#843](https://github.com/rohitg00/agentmemory/issues/843)). `runStop()` killed the iii engine first, then the worker. The worker's shutdown handler flushes BM25/vector snapshots and audit rows via `indexPersistence.save() -> kv.set() -> state::set`, which all routed through an iii engine that was already dead. Stop order inverted: worker first with a bumped 5s SIGTERM grace (gives a large index a real chance to commit), engine second. The "Memories persisted to disk" message now reflects actual disk state.
+- **`mem::graph-snapshot-rebuild` and `mem::graph-reset` heartbeat-crashed on legacy >25K-node corpora** ([#825](https://github.com/rohitg00/agentmemory/issues/825)). v0.9.27 shipped both endpoints with a `kv.list` call up front. At 75K nodes the response payload blocks the event loop in `JSON.parse` and the iii heartbeat starves before the wall-clock budget timer can fire (the budget was never reachable). `mem::graph-snapshot-rebuild` now refuses pre-flight when no prior snapshot exists, returning `{ legacyCorpus: true }` with operator guidance unless an explicit `force: true` flag is set. `mem::graph-reset` no longer enumerates anything — it writes an empty snapshot and returns. Legacy rows remain on disk as orphans but are never read by any post-#816 hot-path code. This is the recovery escape hatch for the corpus class Allan reported in #814.
+- **iii console install pulled latest engine instead of the pinned v0.11.2** (audit). `III_CONSOLE_INSTALL_CMD` ran `curl -fsSL https://install.iii.dev/iii/main/install.sh | sh` with no version pin. A fresh first-run prompt could install a console build that talks a different protocol than the engine agentmemory pins. The install script reads a `VERSION` env var (`engine_version="${VERSION:-}"` in install.sh), so the command now passes `VERSION=${IIPINNED_VERSION}`. Mismatch error text also updated from "reinstall the latest binary" to reference the pinned version explicitly.
+
+### Docs
+
+- **README "New in vX.Y.Z" callout block removed.** That pattern needed a per-release bump every wave and went stale fast. Latest release notes link points at CHANGELOG.md instead.
+- **`import-jsonl` users warned about Claude Code's `cleanupPeriodDays`.** Default 30-day auto-deletion of `~/.claude/projects/*.jsonl` doesn't affect anyone running the standard hook-wired install (each turn lands in iii state while the session is live), but fresh installs on months-old Claude Code histories silently lost anything older than 30 days. README now flags this with the three workarounds: cron the import, raise `cleanupPeriodDays`, or wire hooks.
+
+### Known limitations carried into 0.9.28
+
+- `mem::graph-query` BFS (`startNodeId`) and text-search (`query`) paths still call `kv.list` and degrade past ~25K nodes on fresh corpora ([#828](https://github.com/rohitg00/agentmemory/issues/828)). The hot path stays safe (snapshot-only). A per-node adjacency index that lets BFS walk via targeted `kv.get` is the right next fix; deferred to the milestone for the structured graph migration ([#309](https://github.com/rohitg00/agentmemory/issues/309)).
+- `/agentmemory:forget` skill still calls `memory_governance_delete` which only touches `KV.memories` and never observations ([#833](https://github.com/rohitg00/agentmemory/issues/833)). The skill rewrite + new `memory_forget` MCP tool are tracked separately.
+- `crypto.randomUUID()` global-only on Node <19 ([#715](https://github.com/rohitg00/agentmemory/issues/715)). Drop-in import fix tracked.
+
+[0.9.28]: https://github.com/rohitg00/agentmemory/compare/v0.9.27...v0.9.28
+
 ## [0.9.27] — 2026-06-04
 
 Two real-world bug fixes reported against v0.9.26 plus a benchmark scorecard correction. No breaking changes; drop-in upgrade.
